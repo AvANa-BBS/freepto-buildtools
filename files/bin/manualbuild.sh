@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-### This is similar to newbuild.sh, but better fits manual builds, where
-### automatical git update operations are not wanted
+### given a directory, it will build the image inside, then put it under $WWW
+
 WWW=/var/www/dev
 BASEDIR=${1%/} #strip slash
 LOCALE=${2:-it_IT.UTF-8}
 TIMEZONE=${3:-Europe/Rome}
 KEYMAP=${4:-it}
-VARIANT=${5:-${LOCALE}}
-DATEFMT='%F_%H.%M'
+VARIANT=${5:-${LOCALE::2}}
+DATEFMT='%y%m%d_%H.%M'
 if [ -r /etc/http_proxy ]; then
 	export http_proxy="$(cat /etc/http_proxy)"
 else
@@ -67,7 +67,7 @@ if [ "$avail_mega" -lt 5000 ]; then
 	exit 5
 fi
 workdir=$(mktemp -d /var/tmp/build/build_$(basename $BASEDIR).XXXXX)
-rsync -r --links --exclude=.git $BASEDIR/ $workdir/
+rsync -r --links $BASEDIR/ $workdir/
 
 cleanup()
 {
@@ -88,15 +88,23 @@ pwd
 
 lb clean
 
+# Info files known in advance
+git log -n 20 --decorate=short --stat > ${imgname}.history.txt
+cp config/freepto ${imgname}.config.txt
+[[ -r config/freepto.local ]] && cat config/freepto.local >> ${imgname}.config.txt
+log="${imgname}.log.txt"
+
 mkdir -p /var/log/build
-if ! ./freepto-config.sh -l $LOCALE -z $TIMEZONE -k $KEYMAP 2>&1 | tee -a /var/log/build/$(basename $BASEDIR).log; then
-	echo "errori nel config"
-	cd ~
-	#rm -rf $workdir
-	exit 2
+if [[ -x freepto-config.sh ]]; then
+	if ! ./freepto-config.sh -l $LOCALE -z $TIMEZONE -k $KEYMAP 2>&1 | tee -a "$log" ; then
+		echo "errori nel config"
+		cd ~
+		#rm -rf $workdir
+		exit 2
+	fi
 fi
 
-if ! lb build 2>&1 | tee -a /var/log/build/$(basename $BASEDIR).log; then
+if ! lb build 2>&1 | tee -a "$log" ; then
 	echo "errori nel build"
 	cd ~
 	#rm -rf $workdir
@@ -111,12 +119,19 @@ then
 fi
 
 
-mv binary.img $imgname
-mv build.log ${imgname}.log.txt
+### "Extra" files
 mv binary.contents ${imgname}.contents.txt
 mv chroot.packages.live ${imgname}.packages.txt
+if [[ -f pkgs.log ]]; then
+	mv pkgs.log ${imgname}.pkgs_log.txt
+fi
+
+### Image itself
+mv binary.img $imgname
+vboxmanage convertdd  ${imgname} ${imgname%.img}.vdi
+chmod a+r ${imgname%.img}.vdi
 sha512sum ${imgname} > ${imgname}.sha512sum.txt
-git log -n 20 --decorate=short --stat > ${imgname}.history.txt
+sha512sum ${imgname%.img}.vdi > ${imgname%.img}.vdi.sha512sum.txt
 
 cd ~
 rm -rf $workdir
@@ -124,6 +139,7 @@ rm -rf $workdir
 # remove old image on /var/www and /var/tmp/build/build*
 find $WWW/ -type f -name "$(basename $BASEDIR)-*" -mtime +3 -delete
 find /var/tmp/build/build* -type f -mtime +1 -delete
+
 
 
 # vim: set ft=sh:
